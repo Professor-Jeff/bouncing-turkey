@@ -158,6 +158,9 @@
   .seq-msg.error { color: #F3A08F; }
   .seq-msg.good { color: var(--xray); }
 
+  .sequence .help { font-size: .9rem; opacity: .8; margin: -.15rem 0 .5rem; }
+  .sequence code { font-family: var(--slab); background: rgba(242,227,179,.12); padding: 0 .3em; border-radius: 3px; }
+
   .hint { font-size: .9rem; opacity: .75; margin: 0 0 1.75rem; min-height: 1.5em; }
 
   h2 { font-family: var(--slab); font-size: 1.3rem; margin: 0 0 .5rem; }
@@ -209,11 +212,24 @@
     <label for="seqInput">Design a sequence, using commas, that always finds the Turkey</label>
     <div class="seq-row">
       <input id="seqInput" type="text" autocomplete="off"
-             placeholder="e.g. 1, 2, 3, 4">
+             placeholder="e.g. 2, 3, 4, 5">
       <button id="seqPlay">Play sequence</button>
       <button id="seqStop" class="secondary" disabled>Stop</button>
     </div>
     <p class="seq-msg" id="seqMsg" aria-live="polite"></p>
+  </div>
+
+  <div class="sequence">
+    <label for="turkeyInput">Challenge it: design a Turkey path that dodges every guess</label>
+    <p class="help">List the turkey's box on each turn, e.g. <code>5, 2, 7, 4</code>, or a start box followed by L/R jumps, e.g. <code>5, L, R, L</code>.</p>
+    <div class="seq-row">
+      <input id="turkeyInput" type="text" autocomplete="off"
+             placeholder="e.g. 5, 2, 7, 4">
+      <button id="turkeyPlay">Test turkey</button>
+      <button id="smartTurkey" class="secondary">Smart turkey</button>
+      <button id="turkeyStop" class="secondary" disabled>Stop</button>
+    </div>
+    <p class="seq-msg" id="turkeyMsg" aria-live="polite"></p>
   </div>
 
   <h2>Turns</h2>
@@ -243,17 +259,25 @@
     seqPlay: document.getElementById('seqPlay'),
     seqStop: document.getElementById('seqStop'),
     seqMsg: document.getElementById('seqMsg'),
+    turkeyInput: document.getElementById('turkeyInput'),
+    turkeyPlay: document.getElementById('turkeyPlay'),
+    smartTurkey: document.getElementById('smartTurkey'),
+    turkeyStop: document.getElementById('turkeyStop'),
+    turkeyMsg: document.getElementById('turkeyMsg'),
   };
 
   let n = 8;
   let state;
   let gameId = 0;
   let playing = false;
+  let script = null;     // a designed turkey path for this game, or null for a random turkey
 
   function newGame() {
     gameId++;
     playing = false;
-    setMsg('');
+    script = null;
+    setMsg(els.seqMsg, '');
+    setMsg(els.turkeyMsg, '');
     state = {
       turkey: 1 + Math.floor(Math.random() * n),
       turns: [],          // {guess, from, dir, path, to, found}
@@ -282,6 +306,12 @@
   }
   const jump = pos => jumpInDir(pos, Math.random() < 0.5 ? -1 : 1);
 
+  // Which direction takes the turkey from pos to target? null if neither does.
+  function dirTo(pos, target) {
+    for (const d of [-1, 1]) if (jumpInDir(pos, d).to === target) return d;
+    return null;
+  }
+
   // Every box the turkey could land on from pos.
   const landings = pos => new Set([jumpInDir(pos, -1).to, jumpInDir(pos, 1).to]);
 
@@ -299,13 +329,30 @@
     return null;
   }
 
-  function analyze(seq) {
-    const all = Array.from({ length: n }, (_, i) => i + 1);
-    const turn = guaranteedTurn(seq, all);
-    if (turn) return { ok: true, text: `This sequence always finds the turkey, by turn ${turn} at the latest.` };
-    const escapes = all.filter(s => guaranteedTurn(seq, [s]) === null);
-    const list = escapes.length === 1 ? `box ${escapes[0]}` : `boxes ${escapes.join(', ')}`;
-    return { ok: false, text: `Not guaranteed: a turkey starting in ${list} can dodge every guess.` };
+  const allBoxes = () => Array.from({ length: n }, (_, i) => i + 1);
+
+  // Build one turkey path (its box on each turn) that dodges every guess,
+  // or null if no turkey can. Depth-first search over the turkey's choices.
+  function findEscape(seq) {
+    const memo = new Map();
+    const go = (pos, t) => {
+      if (seq[t] === pos) return null;
+      if (t === seq.length - 1) return [pos];
+      const key = pos + ':' + t;
+      if (memo.has(key)) return memo.get(key);
+      let res = null;
+      for (const q of landings(pos)) {
+        const rest = go(q, t + 1);
+        if (rest) { res = [pos, ...rest]; break; }
+      }
+      memo.set(key, res);
+      return res;
+    };
+    for (const start of allBoxes()) {
+      const path = go(start, 0);
+      if (path) return path;
+    }
+    return null;
   }
 
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -323,7 +370,9 @@
       render();
       return;
     }
-    const j = jump(state.turkey);
+    const next = script ? script[state.turns.length + 1] : undefined;
+    const d = next === undefined ? null : dirTo(state.turkey, next);
+    const j = d === null ? jump(state.turkey) : jumpInDir(state.turkey, d);
     Object.assign(turn, j, { found: false });
     state.turns.push(turn);
     state.opened = box;
@@ -359,7 +408,10 @@
     els.jPlus.disabled = jumpLen >= MAX_JUMP;
     els.jumpText.textContent = `${jumpLen} ${jumpLen === 1 ? 'box' : 'boxes'}`;
     els.seqPlay.disabled = playing;
+    els.turkeyPlay.disabled = playing;
+    els.smartTurkey.disabled = playing;
     els.seqStop.disabled = !playing;
+    els.turkeyStop.disabled = !playing;
 
     // Boxes
     els.row.style.setProperty('--n', n);
@@ -424,25 +476,62 @@
 
   function parseSequence(text) {
     const parts = text.split(/[\s,]+/).filter(Boolean);
-    if (!parts.length) return { error: 'Enter some box numbers, like 4, 7, 6.' };
+    if (!parts.length) return { error: 'Enter some box numbers, like 2, 3, 4, 5.' };
     const bad = parts.filter(x => !/^\d+$/.test(x) || +x < 1 || +x > n);
     if (bad.length) return { error: `Use whole numbers from 1 to ${n}. Fix: ${bad.join(', ')}.` };
     return { seq: parts.map(Number) };
   }
 
-  function setMsg(text, kind = '') {
-    els.seqMsg.textContent = text;
-    els.seqMsg.className = 'seq-msg' + (kind ? ' ' + kind : '');
+  // A turkey path is the turkey's box on each turn: "5, 2, 7, 4", or a start
+  // box followed by L/R jump directions: "5, L, R, L".
+  function parseTurkey(text, len) {
+    const parts = text.split(/[\s,]+/).filter(Boolean);
+    if (!parts.length) return { error: 'Enter where the turkey is on each turn, like 5, 2, 7, 4.' };
+    const first = parts[0];
+    if (!/^\d+$/.test(first) || +first < 1 || +first > n) {
+      return { error: `Start with the turkey's first box, a number from 1 to ${n}.` };
+    }
+    const rest = parts.slice(1);
+    let path = [+first];
+    if (rest.length && rest.every(x => /^[lr]$/i.test(x))) {
+      for (const x of rest) path.push(jumpInDir(path[path.length - 1], /l/i.test(x) ? -1 : 1).to);
+    } else {
+      const bad = rest.filter(x => !/^\d+$/.test(x) || +x < 1 || +x > n);
+      if (bad.length) return { error: `Use box numbers from 1 to ${n}, or L/R after the start box. Fix: ${bad.join(', ')}.` };
+      path = parts.map(Number);
+      for (let i = 1; i < path.length; i++) {
+        if (!landings(path[i - 1]).has(path[i])) {
+          const opts = [...landings(path[i - 1])].sort((a, b) => a - b);
+          const where = opts.length === 1 ? `box ${opts[0]}` : `box ${opts[0]} or box ${opts[1]}`;
+          return { error: `Turn ${i + 1}: a turkey in box ${path[i - 1]} can't reach box ${path[i]}. With a jump of ${jumpLen} it lands in ${where}.` };
+        }
+      }
+    }
+    if (path.length < len) {
+      return { error: `The turkey needs a box for each of the ${len} guesses; this path only covers ${path.length}.` };
+    }
+    const extra = path.length > len;
+    return { path: path.slice(0, len), extra };
   }
 
-  async function playSequence() {
-    const { seq, error } = parseSequence(els.seqInput.value);
-    if (error) { setMsg(error, 'error'); return; }
-    const result = analyze(seq);
+  function setMsg(el, text, kind = '') {
+    el.textContent = text;
+    el.className = 'seq-msg' + (kind ? ' ' + kind : '');
+  }
+
+  const fmtPath = path => path.join(' → ');
+
+  // Play a guess sequence against a random turkey, or against a designed
+  // path. Returns null if the board was reset mid-run.
+  async function runGame(seq, path) {
     newGame();
+    if (path) {
+      script = path;
+      state.turkey = path[0];
+      els.xray.checked = true;      // the point is to watch the dodge
+    }
     playing = true;
     const id = gameId;
-    setMsg(`Playing ${seq.length} ${seq.length === 1 ? 'guess' : 'guesses'}…`);
     render();
     const gap = reduceMotion ? 150 : 650;
     for (const g of seq) {
@@ -451,17 +540,72 @@
       if (id !== gameId || state.won) break;
       await wait(gap);
     }
-    if (id !== gameId) return;          // board was reset mid-run
-    const stopped = playing === false;
+    if (id !== gameId) return null;
+    const stopped = !playing;
     playing = false;
     render();
-    const outcome = state.won ? '' : stopped ? 'Stopped. ' : 'The sequence ran out without finding the turkey. ';
-    setMsg(outcome + result.text, result.ok ? 'good' : 'error');
+    return { stopped, won: state.won, path: state.turns.map(t => t.from) };
+  }
+
+  async function playSequence() {
+    const { seq, error } = parseSequence(els.seqInput.value);
+    if (error) { setMsg(els.seqMsg, error, 'error'); return; }
+    setMsg(els.seqMsg, `Playing ${seq.length} ${seq.length === 1 ? 'guess' : 'guesses'} against a random turkey…`);
+    const r = await runGame(seq, null);
+    if (!r) return;
+    if (r.stopped) { setMsg(els.seqMsg, 'Stopped.'); return; }
+    if (r.won) {
+      const t = state.turns.length;
+      setMsg(els.seqMsg, `Found the turkey in ${t} ${t === 1 ? 'turn' : 'turns'} this time. One lucky game doesn't prove the claim: challenge it below, or ask the smart turkey.`, 'good');
+    } else {
+      els.turkeyInput.value = r.path.join(', ');
+      setMsg(els.seqMsg, `This turkey dodged all ${seq.length} guesses (${fmtPath(r.path)}). Claim broken! Its path is now in the challenge box below.`, 'error');
+    }
+  }
+
+  async function testTurkey(path, note) {
+    const { seq, error } = parseSequence(els.seqInput.value);
+    if (error) { setMsg(els.turkeyMsg, 'Enter the guess sequence above first. ' + error, 'error'); return; }
+    if (!path) {
+      const parsed = parseTurkey(els.turkeyInput.value, seq.length);
+      if (parsed.error) { setMsg(els.turkeyMsg, parsed.error, 'error'); return; }
+      path = parsed.path;
+      note = parsed.extra ? ` (Entries after turn ${seq.length} were ignored.)` : '';
+    }
+    const caught = path.findIndex((p, i) => p === seq[i]);
+    setMsg(els.turkeyMsg, `Playing the turkey along ${fmtPath(path)}…`);
+    const r = await runGame(seq, path);
+    if (!r) return;
+    if (r.stopped) { setMsg(els.turkeyMsg, 'Stopped.'); return; }
+    if (caught >= 0) {
+      setMsg(els.turkeyMsg, `Caught on turn ${caught + 1}: the turkey was in box ${path[caught]} when it was opened. The sequence survives this challenge.${note || ''}`, 'good');
+    } else {
+      setMsg(els.turkeyMsg, `Claim broken: this turkey dodges all ${seq.length} guesses.${note || ''}`, 'error');
+    }
+  }
+
+  async function smartTurkey() {
+    const { seq, error } = parseSequence(els.seqInput.value);
+    if (error) { setMsg(els.turkeyMsg, 'Enter the guess sequence above first. ' + error, 'error'); return; }
+    const path = findEscape(seq);
+    if (!path) {
+      const turn = guaranteedTurn(seq, allBoxes());
+      newGame();
+      setMsg(els.turkeyMsg, `No turkey can dodge this sequence, wherever it starts or whichever way it jumps. The claim holds: every turkey is caught by turn ${turn} at the latest.`, 'good');
+      return;
+    }
+    els.turkeyInput.value = path.join(', ');
+    await testTurkey(path, ' The smart turkey found this path for you.');
   }
 
   els.seqPlay.addEventListener('click', playSequence);
   els.seqInput.addEventListener('keydown', e => { if (e.key === 'Enter') playSequence(); });
-  els.seqStop.addEventListener('click', () => { playing = false; render(); });
+  els.turkeyPlay.addEventListener('click', () => testTurkey());
+  els.turkeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') testTurkey(); });
+  els.smartTurkey.addEventListener('click', smartTurkey);
+  const stop = () => { playing = false; render(); };
+  els.seqStop.addEventListener('click', stop);
+  els.turkeyStop.addEventListener('click', stop);
 
   els.minus.addEventListener('click', () => { if (n > MIN_N) { n--; newGame(); } });
   els.plus.addEventListener('click', () => { if (n < MAX_N) { n++; newGame(); } });
