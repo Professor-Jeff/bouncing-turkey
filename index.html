@@ -226,7 +226,6 @@
       <input id="turkeyInput" type="text" autocomplete="off"
              placeholder="e.g. 5, 2, 7, 4">
       <button id="turkeyPlay">Test turkey</button>
-      <button id="smartTurkey" class="secondary">Smart turkey</button>
       <button id="turkeyStop" class="secondary" disabled>Stop</button>
     </div>
     <p class="seq-msg" id="turkeyMsg" aria-live="polite"></p>
@@ -261,7 +260,6 @@
     seqMsg: document.getElementById('seqMsg'),
     turkeyInput: document.getElementById('turkeyInput'),
     turkeyPlay: document.getElementById('turkeyPlay'),
-    smartTurkey: document.getElementById('smartTurkey'),
     turkeyStop: document.getElementById('turkeyStop'),
     turkeyMsg: document.getElementById('turkeyMsg'),
   };
@@ -314,46 +312,6 @@
 
   // Every box the turkey could land on from pos.
   const landings = pos => new Set([jumpInDir(pos, -1).to, jumpInDir(pos, 1).to]);
-
-  // Follow every possible turkey at once. Returns the turn by which the
-  // sequence always wins, or null if some turkey can dodge it.
-  function guaranteedTurn(seq, starts) {
-    let possible = new Set(starts);
-    for (let t = 0; t < seq.length; t++) {
-      possible.delete(seq[t]);
-      if (possible.size === 0) return t + 1;
-      const next = new Set();
-      possible.forEach(p => landings(p).forEach(q => next.add(q)));
-      possible = next;
-    }
-    return null;
-  }
-
-  const allBoxes = () => Array.from({ length: n }, (_, i) => i + 1);
-
-  // Build one turkey path (its box on each turn) that dodges every guess,
-  // or null if no turkey can. Depth-first search over the turkey's choices.
-  function findEscape(seq) {
-    const memo = new Map();
-    const go = (pos, t) => {
-      if (seq[t] === pos) return null;
-      if (t === seq.length - 1) return [pos];
-      const key = pos + ':' + t;
-      if (memo.has(key)) return memo.get(key);
-      let res = null;
-      for (const q of landings(pos)) {
-        const rest = go(q, t + 1);
-        if (rest) { res = [pos, ...rest]; break; }
-      }
-      memo.set(key, res);
-      return res;
-    };
-    for (const start of allBoxes()) {
-      const path = go(start, 0);
-      if (path) return path;
-    }
-    return null;
-  }
 
   const wait = ms => new Promise(r => setTimeout(r, ms));
 
@@ -409,7 +367,6 @@
     els.jumpText.textContent = `${jumpLen} ${jumpLen === 1 ? 'box' : 'boxes'}`;
     els.seqPlay.disabled = playing;
     els.turkeyPlay.disabled = playing;
-    els.smartTurkey.disabled = playing;
     els.seqStop.disabled = !playing;
     els.turkeyStop.disabled = !playing;
 
@@ -556,53 +513,36 @@
     if (r.stopped) { setMsg(els.seqMsg, 'Stopped.'); return; }
     if (r.won) {
       const t = state.turns.length;
-      setMsg(els.seqMsg, `Found the turkey in ${t} ${t === 1 ? 'turn' : 'turns'} this time. One lucky game doesn't prove the claim: challenge it below, or ask the smart turkey.`, 'good');
+      setMsg(els.seqMsg, `Found the turkey in ${t} ${t === 1 ? 'turn' : 'turns'} this time. One lucky game doesn't prove the claim: challenge it below.`, 'good');
     } else {
       els.turkeyInput.value = r.path.join(', ');
       setMsg(els.seqMsg, `This turkey dodged all ${seq.length} guesses (${fmtPath(r.path)}). Claim broken! Its path is now in the challenge box below.`, 'error');
     }
   }
 
-  async function testTurkey(path, note) {
+  async function testTurkey() {
     const { seq, error } = parseSequence(els.seqInput.value);
     if (error) { setMsg(els.turkeyMsg, 'Enter the guess sequence above first. ' + error, 'error'); return; }
-    if (!path) {
-      const parsed = parseTurkey(els.turkeyInput.value, seq.length);
-      if (parsed.error) { setMsg(els.turkeyMsg, parsed.error, 'error'); return; }
-      path = parsed.path;
-      note = parsed.extra ? ` (Entries after turn ${seq.length} were ignored.)` : '';
-    }
+    const parsed = parseTurkey(els.turkeyInput.value, seq.length);
+    if (parsed.error) { setMsg(els.turkeyMsg, parsed.error, 'error'); return; }
+    const { path } = parsed;
+    const note = parsed.extra ? ` (Entries after turn ${seq.length} were ignored.)` : '';
     const caught = path.findIndex((p, i) => p === seq[i]);
     setMsg(els.turkeyMsg, `Playing the turkey along ${fmtPath(path)}…`);
     const r = await runGame(seq, path);
     if (!r) return;
     if (r.stopped) { setMsg(els.turkeyMsg, 'Stopped.'); return; }
     if (caught >= 0) {
-      setMsg(els.turkeyMsg, `Caught on turn ${caught + 1}: the turkey was in box ${path[caught]} when it was opened. The sequence survives this challenge.${note || ''}`, 'good');
+      setMsg(els.turkeyMsg, `Caught on turn ${caught + 1}: the turkey was in box ${path[caught]} when it was opened. The sequence survives this challenge.${note}`, 'good');
     } else {
-      setMsg(els.turkeyMsg, `Claim broken: this turkey dodges all ${seq.length} guesses.${note || ''}`, 'error');
+      setMsg(els.turkeyMsg, `Claim broken: this turkey dodges all ${seq.length} guesses.${note}`, 'error');
     }
-  }
-
-  async function smartTurkey() {
-    const { seq, error } = parseSequence(els.seqInput.value);
-    if (error) { setMsg(els.turkeyMsg, 'Enter the guess sequence above first. ' + error, 'error'); return; }
-    const path = findEscape(seq);
-    if (!path) {
-      const turn = guaranteedTurn(seq, allBoxes());
-      newGame();
-      setMsg(els.turkeyMsg, `No turkey can dodge this sequence, wherever it starts or whichever way it jumps. The claim holds: every turkey is caught by turn ${turn} at the latest.`, 'good');
-      return;
-    }
-    els.turkeyInput.value = path.join(', ');
-    await testTurkey(path, ' The smart turkey found this path for you.');
   }
 
   els.seqPlay.addEventListener('click', playSequence);
   els.seqInput.addEventListener('keydown', e => { if (e.key === 'Enter') playSequence(); });
   els.turkeyPlay.addEventListener('click', () => testTurkey());
   els.turkeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') testTurkey(); });
-  els.smartTurkey.addEventListener('click', smartTurkey);
   const stop = () => { playing = false; render(); };
   els.seqStop.addEventListener('click', stop);
   els.turkeyStop.addEventListener('click', stop);
