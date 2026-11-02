@@ -80,6 +80,19 @@
   .status.won { color: var(--wattle); }
   body.xray .status.won { color: var(--wattle); }
 
+  /* board: the row of boxes plus an overlay for the turkey's jump arc */
+  .board { position: relative; padding-top: 0; transition: padding-top .3s; }
+  body.xray .board { padding-top: 3.25rem; }
+  .arc {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; overflow: visible; display: none;
+    animation: arc-in .3s ease-out;
+  }
+  body.xray .arc.on { display: block; }
+  .arc path { fill: none; stroke: var(--xray); stroke-width: 2.5; stroke-linecap: round; }
+  .arc .head { fill: var(--xray); stroke: none; }
+  @keyframes arc-in { from { opacity: 0; transform: translateY(6px); } }
+
   .row {
     display: grid;
     grid-template-columns: repeat(var(--n), minmax(0, 1fr));
@@ -188,7 +201,7 @@
   .empty-log { opacity: .7; margin: 0; }
 
   @media (prefers-reduced-motion: reduce) {
-    * { transition: none !important; }
+    * { transition: none !important; animation: none !important; }
   }
 </style>
 </head>
@@ -223,7 +236,17 @@
   </div>
 
   <div class="status" id="status" aria-live="polite"></div>
-  <div class="row" id="row"></div>
+  <div class="board" id="board">
+    <svg class="arc" id="arc" aria-hidden="true">
+      <defs>
+        <marker id="arcHead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth">
+          <path class="head" d="M0,0 L8,4 L0,8 z"/>
+        </marker>
+      </defs>
+      <path id="arcPath" marker-end="url(#arcHead)" d=""/>
+    </svg>
+    <div class="row" id="row"></div>
+  </div>
   <p class="hint" id="hint"></p>
 
   <div class="sequence">
@@ -268,6 +291,9 @@
 
   const els = {
     row: document.getElementById('row'),
+    board: document.getElementById('board'),
+    arc: document.getElementById('arc'),
+    arcPath: document.getElementById('arcPath'),
     status: document.getElementById('status'),
     hint: document.getElementById('hint'),
     logWrap: document.getElementById('logWrap'),
@@ -474,6 +500,8 @@
       els.row.appendChild(b);
     }
 
+    drawArc(shown || (t ? state.turns[t - 1] : null));
+
     // Turn stepper
     els.prevTurn.disabled = t === 0 || pointer === 0 || state.busy || playing;
     els.nextTurn.disabled = live || state.busy || playing;
@@ -525,6 +553,37 @@
     els.logWrap.innerHTML = '';
     els.logWrap.appendChild(ol);
   }
+
+  // Draw an arrow over the boxes from where the turkey was to where it
+  // landed on the given turn (a small loop if it stayed put). X-ray only.
+  function drawArc(turn) {
+    const show = turn && !turn.found && els.xray.checked;
+    els.arc.classList.toggle('on', !!show);
+    if (!show) return;
+    const boxes = els.row.children;
+    const wrap = els.board.getBoundingClientRect();
+    const r1 = boxes[turn.from - 1].getBoundingClientRect();
+    const r2 = boxes[turn.to - 1].getBoundingClientRect();
+    const x1 = r1.left - wrap.left + r1.width / 2;
+    const x2 = r2.left - wrap.left + r2.width / 2;
+    const y = r1.top - wrap.top - 3;             // just above the lids
+    const room = Math.max(12, y - 6);            // space above the boxes
+    let d;
+    if (turn.dir === null) {
+      const h = Math.min(room, 34);
+      d = `M ${x1 - 9} ${y} C ${x1 - 30} ${y - h}, ${x1 + 30} ${y - h}, ${x1 + 9} ${y}`;
+    } else {
+      const h = Math.min(room, 14 + 5 * Math.abs(turn.to - turn.from));
+      d = `M ${x1} ${y} Q ${(x1 + x2) / 2} ${y - 2 * h} ${x2} ${y}`;
+    }
+    els.arc.setAttribute('viewBox', `0 0 ${wrap.width} ${wrap.height}`);
+    els.arcPath.setAttribute('d', d);
+    // restart the fade-in
+    els.arc.style.animation = 'none';
+    void els.arc.offsetWidth;
+    els.arc.style.animation = '';
+  }
+  window.addEventListener('resize', () => render());
 
   function parseSequence(text) {
     const parts = text.split(/[\s,]+/).filter(Boolean);
