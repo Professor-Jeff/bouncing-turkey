@@ -179,7 +179,7 @@
   <h1>The Bouncing Turkey 🦃</h1>
 
   <div class="rules">
-    <p>A turkey hides in one of the boxes. Each turn, open a box. If the turkey isn't there, it jumps <span id="jumpText">3 boxes</span> left or right.</p>
+    <p>A turkey hides in one of the boxes. Each turn, open a box. If the turkey isn't there, it jumps <span id="jumpText">1 box</span> left or right.</p>
     <p>A jump has to land cleanly inside the row. If jumping one way would carry the turkey past an end, it jumps the other way instead. If neither way fits, it stays where it is.</p>
   </div>
 
@@ -193,7 +193,7 @@
     <div class="stepper" role="group" aria-label="Jump length">
       <span class="label">Jump</span>
       <button id="jMinus" aria-label="Shorter jump">−</button>
-      <output id="jOut" aria-live="polite">3</output>
+      <output id="jOut" aria-live="polite">1</output>
       <button id="jPlus" aria-label="Longer jump">+</button>
     </div>
     <label class="toggle">
@@ -237,7 +237,7 @@
 
 <script>
   const MIN_N = 1, MAX_N = 8, MIN_JUMP = 1, MAX_JUMP = 7;
-  let jumpLen = 3;
+  let jumpLen = 1;
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const els = {
