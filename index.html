@@ -180,7 +180,7 @@
 
   <div class="rules">
     <p>A turkey hides in one of the boxes. Each turn, open a box. If the turkey isn't there, it jumps <span id="jumpText">3 boxes</span> left or right.</p>
-    <p>It counts its jump one box at a time. If it reaches an end before finishing, it turns around and keeps counting. A turkey at an end can only jump inward.</p>
+    <p>A jump has to land cleanly inside the row. If jumping one way would carry the turkey past an end, it jumps the other way instead. If neither way fits, it stays where it is.</p>
   </div>
 
   <div class="controls">
@@ -287,20 +287,16 @@
     render();
   }
 
-  // Count out the jump one box at a time, turning around at the ends.
+  // Jump jumpLen boxes in direction d (-1 left, +1 right). The landing box
+  // must be inside the row: if d would overshoot, the turkey jumps the other
+  // way instead, and if neither way fits it stays put.
+  const fits = pos => pos >= 1 && pos <= n;
   function jumpInDir(pos, d) {
-    if (n === 1) return { dir: null, path: [], to: pos };
-    if (pos === 1) d = 1;
-    if (pos === n) d = -1;
-    const dir = d === 1 ? 'right' : 'left';
+    if (!fits(pos + d * jumpLen)) d = -d;
+    if (!fits(pos + d * jumpLen)) return { dir: null, path: [], to: pos };
     const path = [];
-    for (let i = 0; i < jumpLen; i++) {
-      let next = pos + d;
-      if (next < 1 || next > n) { d = -d; next = pos + d; }
-      pos = next;
-      path.push(pos);
-    }
-    return { dir, path, to: pos };
+    for (let i = 1; i <= jumpLen; i++) path.push(pos + d * i);
+    return { dir: d === 1 ? 'right' : 'left', path, to: pos + d * jumpLen };
   }
   const jump = pos => jumpInDir(pos, Math.random() < 0.5 ? -1 : 1);
 
@@ -421,7 +417,7 @@
           span.className = 'jump';
           span.textContent = turn.dir
             ? ` Turkey was in box ${turn.from}, jumped ${turn.dir} (${[turn.from, ...turn.path].join(' → ')}).`
-            : ` Turkey was in box ${turn.from} and had nowhere to go.`;
+            : ` Turkey was in box ${turn.from}; no jump of ${jumpLen} fit, so it stayed.`;
           li.appendChild(span);
         }
       }
@@ -458,9 +454,12 @@
       path = parts.map(Number);
       for (let i = 1; i < path.length; i++) {
         if (!landings(path[i - 1]).has(path[i])) {
-          const opts = [...landings(path[i - 1])].sort((a, b) => a - b);
-          const where = opts.length === 1 ? `box ${opts[0]}` : `box ${opts[0]} or box ${opts[1]}`;
-          return { error: `Turn ${i + 1}: a turkey in box ${path[i - 1]} can't reach box ${path[i]}. With a jump of ${jumpLen} it lands in ${where}.` };
+          const from = path[i - 1];
+          const opts = [...landings(from)].sort((a, b) => a - b);
+          const where = opts.length === 1 && opts[0] === from
+            ? `no jump of ${jumpLen} fits inside the row from box ${from}, so it has to stay there`
+            : `with a jump of ${jumpLen} it lands in ${opts.length === 1 ? `box ${opts[0]}` : `box ${opts[0]} or box ${opts[1]}`}`;
+          return { error: `Turn ${i + 1}: a turkey in box ${from} can't reach box ${path[i]}: ${where}.` };
         }
       }
     }
