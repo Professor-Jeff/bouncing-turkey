@@ -163,9 +163,27 @@
 
   .hint { font-size: .9rem; opacity: .75; margin: 0 0 1.75rem; min-height: 1.5em; }
 
-  h2 { font-family: var(--slab); font-size: 1.3rem; margin: 0 0 .5rem; }
-  ol.log { margin: 0; padding-left: 1.6rem; max-width: 62ch; }
-  ol.log li { margin-bottom: .25rem; }
+  h2 { font-family: var(--slab); font-size: 1.3rem; margin: 0; }
+  .log-head {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: .5rem 1rem; margin-bottom: .6rem; max-width: 62ch;
+  }
+  .turn-nav { display: flex; align-items: center; gap: .5rem; }
+  .turn-nav button {
+    font: inherit; cursor: pointer; height: 2.2rem; padding: 0 .7rem;
+    border: 2px solid var(--straw); border-radius: 6px; background: transparent; color: var(--straw);
+  }
+  .turn-nav button:disabled { opacity: .35; cursor: default; }
+  .turn-nav button:not(:disabled):hover { background: rgba(242,227,179,.12); }
+  .turn-nav output { font-family: var(--slab); min-width: 5.5ch; text-align: center; }
+  ol.log { margin: 0; padding-left: 2.8rem; max-width: 62ch; }
+  ol.log li { margin-bottom: .25rem; position: relative; }
+  ol.log li.current { color: var(--guess); }
+  ol.log li.current::before {
+    content: "▶"; position: absolute; left: -2.8rem; top: .1em;
+    font-size: .8em; color: var(--guess);
+  }
+  .status.review { color: var(--guess); }
   ol.log .jump { color: var(--xray); }
   .empty-log { opacity: .7; margin: 0; }
 
@@ -232,7 +250,14 @@
     <p class="seq-msg" id="turkeyMsg" aria-live="polite"></p>
   </div>
 
-  <h2>Turns</h2>
+  <div class="log-head">
+    <h2>Turns</h2>
+    <div class="turn-nav" role="group" aria-label="Step through turns">
+      <button id="prevTurn" aria-label="Previous turn">◀ Prev</button>
+      <output id="turnOut" aria-live="polite">–</output>
+      <button id="nextTurn" aria-label="Next turn">Next ▶</button>
+    </div>
+  </div>
   <div id="logWrap"></div>
 </main>
 
@@ -264,6 +289,9 @@
     smartTurkey: document.getElementById('smartTurkey'),
     turkeyStop: document.getElementById('turkeyStop'),
     turkeyMsg: document.getElementById('turkeyMsg'),
+    prevTurn: document.getElementById('prevTurn'),
+    nextTurn: document.getElementById('nextTurn'),
+    turnOut: document.getElementById('turnOut'),
   };
 
   let n = 8;
@@ -283,6 +311,7 @@
       turns: [],          // {guess, from, dir, path, to, found}
       opened: null,       // last box opened (shown as empty)
       trail: [],          // boxes the turkey counted through on its last jump
+      view: null,         // index of a past turn being reviewed, or null for live
       won: false,
       busy: false,
     };
@@ -355,6 +384,7 @@
 
   async function guess(box) {
     if (state.won || state.busy) return;
+    state.view = null;
     const id = gameId;
     const turn = { guess: box, from: state.turkey };
     if (box === state.turkey) {
@@ -409,28 +439,53 @@
     els.seqStop.disabled = !playing;
     els.turkeyStop.disabled = !playing;
 
+    // Which turn is on the board: live, or a past turn being reviewed.
+    const t = state.turns.length;
+    const live = state.view === null || state.view >= t;
+    const shown = live ? null : state.turns[state.view];
+    const pointer = live ? t - 1 : state.view;
+
     // Boxes
     els.row.style.setProperty('--n', n);
     els.row.innerHTML = '';
     for (let i = 1; i <= n; i++) {
       const b = document.createElement('button');
       b.className = 'box';
-      const isFound = state.won && i === state.turkey;
+      let isFound, opened, here, trail;
+      if (shown) {
+        isFound = shown.found && i === shown.guess;
+        opened = !shown.found && i === shown.guess;
+        here = i === (shown.found ? shown.from : shown.to);
+        trail = !shown.found && shown.path.includes(i);
+      } else {
+        isFound = state.won && i === state.turkey;
+        opened = state.opened === i && !state.won;
+        here = i === state.turkey;
+        trail = state.trail.includes(i) && !state.won;
+      }
       if (isFound) b.classList.add('found');
-      else if (state.opened === i && !state.won) b.classList.add('opened');
-      if (i === state.turkey) b.classList.add('here');
-      if (state.trail.includes(i) && !state.won) b.classList.add('trail');
-      b.disabled = state.won || state.busy || playing;
-      b.setAttribute('aria-label', `Open box ${i}` + (xray && i === state.turkey ? ' (turkey is here)' : ''));
+      else if (opened) b.classList.add('opened');
+      if (here) b.classList.add('here');
+      if (trail) b.classList.add('trail');
+      b.disabled = state.won || state.busy || playing || !live;
+      b.setAttribute('aria-label', `Open box ${i}` + (xray && here ? ' (turkey is here)' : ''));
       b.innerHTML = `<span class="bird" aria-hidden="true">🦃</span><span class="num">${i}</span>`;
       b.addEventListener('click', () => guess(i));
       els.row.appendChild(b);
     }
 
+    // Turn stepper
+    els.prevTurn.disabled = t === 0 || pointer === 0 || state.busy || playing;
+    els.nextTurn.disabled = live || state.busy || playing;
+    els.turnOut.textContent = t ? `${pointer + 1} of ${t}` : '–';
+
     // Status
-    const t = state.turns.length;
-    els.status.classList.toggle('won', state.won);
-    if (state.won) {
+    els.status.classList.toggle('won', state.won && live);
+    els.status.classList.toggle('review', !live);
+    if (shown) {
+      els.status.textContent = `Reviewing turn ${state.view + 1} of ${t}: opened box ${shown.guess}, ` +
+        (shown.found ? 'found the turkey!' : 'empty.');
+    } else if (state.won) {
       els.status.textContent = `Found it in ${t} ${t === 1 ? 'turn' : 'turns'}!`;
     } else if (state.busy) {
       els.status.textContent = 'The turkey is jumping…';
@@ -449,8 +504,9 @@
     }
     const ol = document.createElement('ol');
     ol.className = 'log';
-    state.turns.forEach(turn => {
+    state.turns.forEach((turn, idx) => {
       const li = document.createElement('li');
+      if (idx === pointer) li.classList.add('current');
       if (turn.found) {
         li.textContent = `Opened box ${turn.guess}: found the turkey!`;
       } else {
@@ -598,6 +654,23 @@
     els.turkeyInput.value = path.join(', ');
     await testTurkey(path, ' The smart turkey found this path for you.');
   }
+
+  // Step the board back and forward through the turn log.
+  function stepView(d) {
+    const t = state.turns.length;
+    if (!t || state.busy || playing) return;
+    const cur = state.view === null ? t - 1 : state.view;
+    const v = Math.max(0, Math.min(t - 1, cur + d));
+    state.view = v === t - 1 ? null : v;
+    render();
+  }
+  els.prevTurn.addEventListener('click', () => stepView(-1));
+  els.nextTurn.addEventListener('click', () => stepView(1));
+  document.addEventListener('keydown', e => {
+    if (e.target instanceof Element && e.target.matches('input, textarea')) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); stepView(-1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); stepView(1); }
+  });
 
   els.seqPlay.addEventListener('click', playSequence);
   els.seqInput.addEventListener('keydown', e => { if (e.key === 'Enter') playSequence(); });
